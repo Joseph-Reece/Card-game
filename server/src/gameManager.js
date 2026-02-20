@@ -304,7 +304,9 @@ async function playCard(roomCode, playerId, cardCode) {
   let winnerId = null;
 
   // -------------------------------------------------------------------------
-  // Rule 9: last-card check
+  // Rule 9: last-card announcement check.
+  // If the player played their last card without first calling announceLastCard,
+  // they do NOT win – they draw 2 penalty cards and their turn ends.
   // -------------------------------------------------------------------------
   if (currentPlayer.hand.length === 0) {
     if (!currentPlayer.announced) {
@@ -491,7 +493,7 @@ function endTurn(roomCode, playerId) {
     throw new Error('Not your turn');
   }
 
-  if (gameState.pendingQuestion) throw new Error('Must play an answer card first');
+  if (gameState.pendingQuestion) throw new Error('Must play an answer card (or draw) to resolve the 8/Q question first');
   if (gameState.pendingSuit) throw new Error('Must choose a suit first');
   if (gameState.pendingCard) throw new Error('Must choose a card first');
   if (gameState.drawPenaltyCount > 0) throw new Error('Must draw or block the penalty first');
@@ -674,7 +676,7 @@ async function drawCard(roomCode, playerId) {
   // Determine how many cards to draw
   let count;
   if (gameState.pendingQuestion) {
-    // Rule 2: draw 1 to resolve question
+    // Rule 2: drawing 1 card counts as the "answer" to the 8/Q question, resolving pendingQuestion
     count = 1;
   } else if (gameState.jokerPenaltyCount > 0) {
     count = gameState.jokerPenaltyCount;

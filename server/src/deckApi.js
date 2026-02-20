@@ -64,7 +64,7 @@ async function reshuffleDiscardPile(discardPile) {
     return newDeck();
   }
   // All cards except the top one (index length-1)
-  const cardsToReshuffle = discardPile.slice(0, discardPile.length - 1);
+  const cardsToReshuffle = discardPile.slice(0, -1);
   const codes = cardsToReshuffle.map(c => c.code).join(',');
   const res = await fetch(`${BASE_URL}/new/shuffle/?cards=${codes}`);
   if (!res.ok) throw new Error(`Failed to create deck from discard: ${res.statusText}`);
