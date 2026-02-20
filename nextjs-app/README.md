@@ -1,36 +1,77 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Kenyan Local Poker — Next.js (Vercel-ready)
 
-## Getting Started
+This is the **Next.js 14 App Router** version of Kenyan Local Poker, designed for full deployment on **Vercel**.
 
-First, run the development server:
+## Architecture
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Next.js 14 App Router, React 18 |
+| Real-time | [Pusher](https://pusher.com) (replaces Socket.io) |
+| State | [Upstash Redis](https://upstash.com) (replaces in-memory Map) |
+| API | Next.js Route Handlers (13 POST endpoints + GET + Pusher auth) |
+| Cards | [Deck of Cards API](https://deckofcardsapi.com/) |
+
+## Local Development
+
+### 1. Copy the environment template
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.local.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Fill in credentials
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+**Pusher** (free Sandbox plan at https://pusher.com):
+- Create an app, select a cluster (e.g. `eu`)
+- Copy App ID, Key, Secret, Cluster into `.env.local`
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+**Upstash Redis** (free at https://upstash.com):
+- Create a Redis database
+- Copy REST URL and REST Token into `.env.local`
 
-## Learn More
+### 3. Install and run
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm install
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Deploy to Vercel
 
-## Deploy on Vercel
+1. Push the repository to GitHub.
+2. Import the project in [Vercel](https://vercel.com/new) — set the **Root Directory** to `nextjs-app`.
+3. Add the following **Environment Variables** in the Vercel dashboard:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Variable | Description |
+|----------|-------------|
+| `PUSHER_APP_ID` | Pusher App ID |
+| `NEXT_PUBLIC_PUSHER_KEY` | Pusher Key (public) |
+| `PUSHER_SECRET` | Pusher Secret |
+| `NEXT_PUBLIC_PUSHER_CLUSTER` | Pusher Cluster (e.g. `eu`) |
+| `UPSTASH_REDIS_REST_URL` | Upstash REST URL |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash REST Token |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+4. Deploy — all API routes, Pusher auth, and the frontend are served from a single Vercel project.
+
+## API Routes
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/game/create` | Create a room |
+| POST | `/api/game/join` | Join a room |
+| GET | `/api/game/rooms` | List open rooms |
+| POST | `/api/game/ready` | Toggle ready state |
+| POST | `/api/game/start` | GM starts the game |
+| POST | `/api/game/play-card` | Play a card |
+| POST | `/api/game/draw-card` | Draw a card |
+| POST | `/api/game/end-turn` | End turn voluntarily |
+| POST | `/api/game/choose-suit` | Choose suit after Ace |
+| POST | `/api/game/choose-card` | Choose card after Ace of Clubs |
+| POST | `/api/game/announce` | Announce last card |
+| POST | `/api/game/leave` | Leave a room |
+| POST | `/api/game/rules` | GM rule toggles |
+| POST | `/api/pusher/auth` | Pusher private channel auth |
+
