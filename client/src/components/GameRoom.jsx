@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { socket } from '../socket';
 import Card from './Card';
 import PlayerHand from './PlayerHand';
 import SuitPicker from './SuitPicker';
+import CardPicker from './CardPicker';
 
 const DIRECTION_LABELS = {
   clockwise: '→ Clockwise',
@@ -16,8 +17,13 @@ function GameRoom({ playerId, roomCode, onLeave }) {
   const [myHand, setMyHand] = useState([]);
   const [winner, setWinner] = useState(null);
   const [showSuitPicker, setShowSuitPicker] = useState(false);
+  const [showCardPicker, setShowCardPicker] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [lastAction, setLastAction] = useState('');
+  // Tracks whether the current player has played at least one card this turn
+  const [hasPlayedThisTurn, setHasPlayedThisTurn] = useState(false);
+
+  const prevTurnIndexRef = useRef(null);
 
   // Register this socket with the server so private handUpdated events reach us
   useEffect(() => {
@@ -30,23 +36,33 @@ function GameRoom({ playerId, roomCode, onLeave }) {
     socket.on('gameStarted', ({ gameState: gs, players: p }) => {
       setGameState(gs);
       setPlayers(p);
+      setHasPlayedThisTurn(false);
       // hand arrives via handUpdated
     });
 
     socket.on('gameUpdated', ({ gameState: gs, players: p, lastAction: la }) => {
-      setGameState(gs);
+      if (gs) setGameState(gs);
       if (p) setPlayers(p);
       if (la) {
         const actionText = buildActionText(la, p || players);
-        setLastAction(actionText);
-        setTimeout(() => setLastAction(''), 3500);
+        if (actionText) {
+          setLastAction(actionText);
+          setTimeout(() => setLastAction(''), 3500);
+        }
       }
       const currentPlayers = p || players;
-      const shouldShowSuitPicker = !!(
-        gs?.pendingSuit &&
-        gs?.currentTurnIndex === getMyIndex(currentPlayers, playerId)
-      );
-      setShowSuitPicker(shouldShowSuitPicker);
+      const myIdx = getMyIndex(currentPlayers, playerId);
+      const turnIdx = gs?.currentTurnIndex ?? -1;
+
+      // Reset hasPlayedThisTurn whenever the active turn index changes
+      if (turnIdx !== prevTurnIndexRef.current) {
+        prevTurnIndexRef.current = turnIdx;
+        setHasPlayedThisTurn(false);
+      }
+
+      const isMyTurnNow = turnIdx === myIdx && gs?.phase === 'playing';
+      setShowSuitPicker(!!(gs?.pendingSuit && isMyTurnNow));
+      setShowCardPicker(!!(gs?.pendingCard && isMyTurnNow));
     });
 
     socket.on('handUpdated', ({ hand }) => setMyHand(hand));
@@ -79,9 +95,15 @@ function GameRoom({ playerId, roomCode, onLeave }) {
 
   function buildActionText(la, playerList) {
     const actor = playerList?.find((p) => p.id === la.playerId)?.username || 'Someone';
-    if (la.type === 'playCard') return `${actor} played ${la.card?.value} of ${la.card?.suit}`;
+    if (la.type === 'playCard') {
+      if (la.noAnnounce) return `${actor} forgot to announce! Drawing 2 cards 😬`;
+      return `${actor} played ${la.card?.value} of ${la.card?.suit}`;
+    }
     if (la.type === 'drawCard') return `${actor} drew ${la.count} card${la.count !== 1 ? 's' : ''}`;
     if (la.type === 'chooseSuit') return `${actor} chose ${la.suit}`;
+    if (la.type === 'chooseCard') return `${actor} set target: ${la.rank} of ${la.suit} ♣`;
+    if (la.type === 'announceLastCard') return `${actor} announces: ONE CARD LEFT! 🃏`;
+    if (la.type === 'endTurn') return '';
     return '';
   }
 
@@ -98,18 +120,35 @@ function GameRoom({ playerId, roomCode, onLeave }) {
   const discardPile = gameState?.discardPile || [];
   const topDiscard = discardPile.length > 0 ? discardPile[discardPile.length - 1] : null;
 
-  const activeSuit = gameState?.activeSuit || topDiscard?.suit || null;
+  // Rule 3: activeSuit is ONLY from gameState (do NOT fall back to topDiscard.suit)
+  const activeSuit = gameState?.activeSuit || null;
+  const activeRank = gameState?.activeRank || null;
   const drawPenaltyCount = gameState?.drawPenaltyCount || 0;
+  const dangerRank = gameState?.dangerRank || null;
+  const jokerPenaltyCount = gameState?.jokerPenaltyCount || 0;
   const direction = gameState?.direction || 'clockwise';
   const noSpecialWin = gameState?.noSpecialWin || false;
+  const jokerEnabled = gameState?.jokerEnabled || false;
+  const stackableDanger = gameState?.stackableDanger || false;
+  const pendingQuestion = gameState?.pendingQuestion || false;
 
   const allReady = players.length > 1 && players.every((p) => p.isReady);
 
+  // Rule 1: Done button shown only after playing a card, with no blocking states or active penalties
+  const canEndTurn = isMyTurn && hasPlayedThisTurn &&
+    !pendingQuestion && !gameState?.pendingSuit && !gameState?.pendingCard &&
+    drawPenaltyCount === 0 && jokerPenaltyCount === 0;
+
   const handlePlayCard = useCallback((card) => {
     socket.emit('playCard', { roomCode, playerId, cardCode: card.code });
+    setHasPlayedThisTurn(true);
   }, [roomCode, playerId]);
 
   const handleDrawCard = () => socket.emit('drawCard', { roomCode, playerId });
+
+  const handleEndTurn = () => socket.emit('endTurn', { roomCode, playerId });
+
+  const handleAnnounce = () => socket.emit('announceLastCard', { roomCode, playerId });
 
   const handleReady = () => {
     const currentReady = myPlayer?.isReady || false;
@@ -119,8 +158,15 @@ function GameRoom({ playerId, roomCode, onLeave }) {
   const handleStartGame = () => socket.emit('startGame', { roomCode, playerId });
 
   const handleNoSpecialWin = () => {
-    // Server toggle: send current desired state
     socket.emit('setNoSpecialWin', { roomCode, playerId, noSpecialWin: !noSpecialWin });
+  };
+
+  const handleJokerEnabled = () => {
+    socket.emit('setJokerEnabled', { roomCode, playerId, jokerEnabled: !jokerEnabled });
+  };
+
+  const handleStackableDanger = () => {
+    socket.emit('setStackableDanger', { roomCode, playerId, stackableDanger: !stackableDanger });
   };
 
   const handleLeave = () => {
@@ -129,6 +175,7 @@ function GameRoom({ playerId, roomCode, onLeave }) {
   };
 
   const handleSuitChosen = () => setShowSuitPicker(false);
+  const handleCardChosen = () => setShowCardPicker(false);
 
   const otherPlayers = players.filter((p) => p.id !== playerId);
   const suitLabel = activeSuit ? `${SUIT_SYMBOLS[activeSuit] || ''} ${activeSuit}` : '—';
@@ -150,9 +197,13 @@ function GameRoom({ playerId, roomCode, onLeave }) {
           {phase === 'playing' && (
             <div className="game-info-bar">
               <span>Suit: <strong>{suitLabel}</strong></span>
+              {activeRank && <span>Rank: <strong>{activeRank}</strong></span>}
               <span>{DIRECTION_LABELS[direction] || direction}</span>
               {drawPenaltyCount > 0 && (
                 <span className="penalty-badge">⚠ Draw ×{drawPenaltyCount}</span>
+              )}
+              {jokerPenaltyCount > 0 && (
+                <span className="penalty-badge">🃏 Joker ×{jokerPenaltyCount}</span>
               )}
             </div>
           )}
@@ -176,6 +227,7 @@ function GameRoom({ playerId, roomCode, onLeave }) {
                 {p.isGM && '👑 '}
                 {p.username}
                 {p.isReady && phase === 'lobby' && <span className="ready-dot"> ✓</span>}
+                {p.announced && <span className="announced-dot"> 🃏</span>}
               </div>
               <div className="other-player-cards">
                 {Array.from({ length: Math.min(p.handSize || 0, 10) }).map((_, i) => (
@@ -205,7 +257,14 @@ function GameRoom({ playerId, roomCode, onLeave }) {
           <div className="turn-indicator">
             {phase === 'playing' && (
               isMyTurn
-                ? <span className="your-turn">⭐ Your Turn!</span>
+                ? (
+                  <div>
+                    <span className="your-turn">⭐ Your Turn!</span>
+                    {pendingQuestion && (
+                      <div className="pending-question-banner">⚡ Answer the Question! Play a card or draw.</div>
+                    )}
+                  </div>
+                )
                 : <span className="waiting-turn">Waiting for <strong>{currentTurnPlayer?.username || '…'}</strong></span>
             )}
             {phase === 'lobby' && <span className="lobby-phase">Waiting for players…</span>}
@@ -218,6 +277,16 @@ function GameRoom({ playerId, roomCode, onLeave }) {
               <button className="btn btn-primary" onClick={handleDrawCard}>
                 🃏 Draw Card
               </button>
+              {canEndTurn && (
+                <button className="btn btn-success done-btn" onClick={handleEndTurn}>
+                  ✅ Done (End Turn)
+                </button>
+              )}
+              {myHand.length === 1 && !myPlayer?.announced && (
+                <button className="btn announce-btn" onClick={handleAnnounce}>
+                  📢 Announce! (Last Card)
+                </button>
+              )}
             </div>
           )}
 
@@ -247,6 +316,18 @@ function GameRoom({ playerId, roomCode, onLeave }) {
                   >
                     {noSpecialWin ? '🔒 No Special Win: ON' : '🔓 No Special Win: OFF'}
                   </button>
+                  <button
+                    className={`btn btn-sm ${jokerEnabled ? 'btn-warning' : 'btn-outline'}`}
+                    onClick={handleJokerEnabled}
+                  >
+                    {jokerEnabled ? '🃏 Joker Rule: ON' : '🃏 Joker Rule: OFF'}
+                  </button>
+                  <button
+                    className={`btn btn-sm ${stackableDanger ? 'btn-warning' : 'btn-outline'}`}
+                    onClick={handleStackableDanger}
+                  >
+                    {stackableDanger ? '📚 Stack Danger: ON' : '📚 Stack Danger: OFF'}
+                  </button>
                 </div>
               )}
             </div>
@@ -261,14 +342,22 @@ function GameRoom({ playerId, roomCode, onLeave }) {
           isMyTurn={isMyTurn}
           topDiscard={topDiscard}
           activeSuit={activeSuit}
+          activeRank={activeRank}
           drawPenaltyCount={drawPenaltyCount}
+          dangerRank={dangerRank}
+          jokerPenaltyCount={jokerPenaltyCount}
           onPlayCard={handlePlayCard}
         />
       )}
 
-      {/* Suit picker modal */}
+      {/* Suit picker modal (regular Ace) */}
       {showSuitPicker && (
         <SuitPicker roomCode={roomCode} playerId={playerId} onChoose={handleSuitChosen} />
+      )}
+
+      {/* Card picker modal (Ace of Clubs) */}
+      {showCardPicker && (
+        <CardPicker roomCode={roomCode} playerId={playerId} onChoose={handleCardChosen} />
       )}
 
       {/* Winner overlay */}

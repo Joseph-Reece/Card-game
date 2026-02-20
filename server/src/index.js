@@ -41,6 +41,20 @@ function emitError(socket, message) {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: emit updated hand to all sockets in a room
+// ---------------------------------------------------------------------------
+async function broadcastHandUpdates(roomCode, handUpdates) {
+  if (!handUpdates) return;
+  const allSockets = await io.in(roomCode).fetchSockets();
+  allSockets.forEach((s) => {
+    const pid = s.data && s.data.playerId;
+    if (pid && handUpdates[pid] !== undefined) {
+      s.emit('handUpdated', { hand: handUpdates[pid] });
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Connection handler
 // ---------------------------------------------------------------------------
 
@@ -120,11 +134,9 @@ io.on('connection', (socket) => {
       io.to(roomCode).emit('gameStarted', {
         gameState: result.gameState,
         players: result.players,
-        // hands is intentionally omitted from the broadcast; individual handUpdated follows
       });
 
       // Emit private handUpdated to each player
-      // We need a playerId→socketId mapping.  We maintain it via socket.data below.
       const room = gm.getRoom(roomCode);
       if (room) {
         const allSockets = await io.in(roomCode).fetchSockets();
@@ -150,25 +162,96 @@ io.on('connection', (socket) => {
     try {
       const result = await gm.playCard(roomCode, playerId, cardCode);
 
-      // Broadcast public game update
+      // Broadcast public game update (include canContinue so client can show Done button)
       io.to(roomCode).emit('gameUpdated', {
         gameState: result.gameState,
         players: result.players,
         lastAction: result.lastAction,
+        canContinue: result.canContinue,
       });
 
       // Send updated hand to the player who just played
-      if (result.handUpdates) {
-        const allSockets = await io.in(roomCode).fetchSockets();
-        allSockets.forEach((s) => {
-          const pid = s.data && s.data.playerId;
-          if (pid && result.handUpdates[pid] !== undefined) {
-            s.emit('handUpdated', { hand: result.handUpdates[pid] });
-          }
-        });
-      }
+      await broadcastHandUpdates(roomCode, result.handUpdates);
 
       // Announce winner
+      if (result.winnerId) {
+        const room = gm.getRoom(roomCode);
+        const winner = room
+          ? room.players.find(p => p.id === result.winnerId) || { username: 'Unknown' }
+          : { username: 'Unknown' };
+        io.to(roomCode).emit('playerWon', {
+          playerId: result.winnerId,
+          username: winner.username,
+        });
+      }
+    } catch (err) {
+      emitError(socket, err.message);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // endTurn (rule 1)
+  // -------------------------------------------------------------------------
+  socket.on('endTurn', ({ roomCode, playerId } = {}) => {
+    if (!roomCode || !playerId) return emitError(socket, 'roomCode and playerId are required');
+    try {
+      const result = gm.endTurn(roomCode, playerId);
+      io.to(roomCode).emit('gameUpdated', {
+        gameState: result.gameState,
+        players: result.players,
+        lastAction: result.lastAction,
+        canContinue: false,
+      });
+    } catch (err) {
+      emitError(socket, err.message);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // announceLastCard (rule 9)
+  // -------------------------------------------------------------------------
+  socket.on('announceLastCard', ({ roomCode, playerId } = {}) => {
+    if (!roomCode || !playerId) return emitError(socket, 'roomCode and playerId are required');
+    try {
+      const result = gm.announceLastCard(roomCode, playerId);
+      io.to(roomCode).emit('gameUpdated', {
+        players: result.players,
+        lastAction: result.lastAction,
+      });
+    } catch (err) {
+      emitError(socket, err.message);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // chooseCard (rule 6 – Ace of Clubs)
+  // -------------------------------------------------------------------------
+  socket.on('chooseCard', async ({ roomCode, playerId, rank, suit } = {}) => {
+    if (!roomCode || !playerId || !rank || !suit) {
+      return emitError(socket, 'roomCode, playerId, rank and suit are required');
+    }
+    try {
+      const result = gm.chooseCard(roomCode, playerId, rank, suit);
+
+      io.to(roomCode).emit('gameUpdated', {
+        gameState: result.gameState,
+        players: result.players,
+        lastAction: result.lastAction,
+        canContinue: false,
+      });
+
+      // noSpecialWin forced-draw case
+      if (result.lastAction.forcedDraw) {
+        const drawResult = await gm.drawCard(roomCode, playerId);
+        io.to(roomCode).emit('gameUpdated', {
+          gameState: drawResult.gameState,
+          players: drawResult.players,
+          lastAction: drawResult.lastAction,
+          canContinue: false,
+        });
+        await broadcastHandUpdates(roomCode, drawResult.handUpdates);
+      }
+
       if (result.winnerId) {
         const room = gm.getRoom(roomCode);
         const winner = room
@@ -198,6 +281,7 @@ io.on('connection', (socket) => {
         gameState: result.gameState,
         players: result.players,
         lastAction: result.lastAction,
+        canContinue: false,
       });
 
       // noSpecialWin edge case: player had Ace as last card – force a draw
@@ -207,14 +291,9 @@ io.on('connection', (socket) => {
           gameState: drawResult.gameState,
           players: drawResult.players,
           lastAction: drawResult.lastAction,
+          canContinue: false,
         });
-        const allSockets = await io.in(roomCode).fetchSockets();
-        allSockets.forEach((s) => {
-          const pid = s.data && s.data.playerId;
-          if (pid && drawResult.handUpdates[pid] !== undefined) {
-            s.emit('handUpdated', { hand: drawResult.handUpdates[pid] });
-          }
-        });
+        await broadcastHandUpdates(roomCode, drawResult.handUpdates);
       }
 
       if (result.winnerId) {
@@ -244,18 +323,11 @@ io.on('connection', (socket) => {
         gameState: result.gameState,
         players: result.players,
         lastAction: result.lastAction,
+        canContinue: false,
       });
 
       // Send updated hand only to the player who drew
-      if (result.handUpdates) {
-        const allSockets = await io.in(roomCode).fetchSockets();
-        allSockets.forEach((s) => {
-          const pid = s.data && s.data.playerId;
-          if (pid && result.handUpdates[pid] !== undefined) {
-            s.emit('handUpdated', { hand: result.handUpdates[pid] });
-          }
-        });
-      }
+      await broadcastHandUpdates(roomCode, result.handUpdates);
     } catch (err) {
       emitError(socket, err.message);
     }
@@ -273,6 +345,42 @@ io.on('connection', (socket) => {
       io.to(roomCode).emit('gameUpdated', {
         gameState: result.gameState,
         lastAction: { type: 'ruleChange', noSpecialWin: result.gameState.noSpecialWin },
+      });
+    } catch (err) {
+      emitError(socket, err.message);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // setJokerEnabled (GM toggle)
+  // -------------------------------------------------------------------------
+  socket.on('setJokerEnabled', ({ roomCode, playerId, jokerEnabled } = {}) => {
+    if (!roomCode || !playerId || jokerEnabled === undefined) {
+      return emitError(socket, 'roomCode, playerId and jokerEnabled are required');
+    }
+    try {
+      const result = gm.setJokerEnabled(roomCode, playerId, jokerEnabled);
+      io.to(roomCode).emit('gameUpdated', {
+        gameState: result.gameState,
+        lastAction: { type: 'ruleChange', jokerEnabled: result.gameState.jokerEnabled },
+      });
+    } catch (err) {
+      emitError(socket, err.message);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // setStackableDanger (GM toggle)
+  // -------------------------------------------------------------------------
+  socket.on('setStackableDanger', ({ roomCode, playerId, stackableDanger } = {}) => {
+    if (!roomCode || !playerId || stackableDanger === undefined) {
+      return emitError(socket, 'roomCode, playerId and stackableDanger are required');
+    }
+    try {
+      const result = gm.setStackableDanger(roomCode, playerId, stackableDanger);
+      io.to(roomCode).emit('gameUpdated', {
+        gameState: result.gameState,
+        lastAction: { type: 'ruleChange', stackableDanger: result.gameState.stackableDanger },
       });
     } catch (err) {
       emitError(socket, err.message);

@@ -4,7 +4,11 @@
 // Constants
 // ---------------------------------------------------------------------------
 
-const SPECIAL_RANKS = new Set(['ACE', '2', '3', '8', 'QUEEN', 'JACK', 'KING']);
+const SPECIAL_RANKS = new Set(['ACE', '2', '3', '8', 'QUEEN', 'JACK', 'KING', 'JOKER']);
+// Note: 'JOKER' matches the Deck of Cards API card value for joker cards.
+
+/** Standard ranks (no Joker – used for Ace-of-Clubs card picker validation). */
+const RANKS = ['ACE', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'JACK', 'QUEEN', 'KING'];
 
 // Rank normalisation: Deck of Cards API uses e.g. "ACE", "2" … "10", "JACK",
 // "QUEEN", "KING".  We work with these string values throughout.
@@ -28,28 +32,55 @@ function isSpecialCard(card) {
 /**
  * Decide whether `card` may be played on top of `topDiscard`.
  *
- * When `drawPenaltyCount > 0` the current player is under a 2/3 stack penalty.
- * They may only play another 2 or 3 (to stack further) or an Ace (to block).
- *
  * @param {{ value: string, suit: string }} card
  * @param {{ value: string, suit: string }} topDiscard
- * @param {string|null} activeSuit  – suit chosen after an Ace was played
- * @param {number} drawPenaltyCount
+ * @param {string|null} activeSuit      – suit chosen after a regular Ace
+ * @param {string|null} activeRank      – rank chosen after Ace of Clubs
+ * @param {number}      drawPenaltyCount
+ * @param {string|null} dangerRank      – which rank is the active danger ('2' or '3')
+ * @param {number}      jokerPenaltyCount
  * @returns {boolean}
  */
-function isLegalMove(card, topDiscard, activeSuit, drawPenaltyCount) {
+function isLegalMove(card, topDiscard, activeSuit, activeRank, drawPenaltyCount, dangerRank, jokerPenaltyCount) {
+  if (!topDiscard) return true;
   const rank = card.value.toUpperCase();
   const suit = card.suit.toUpperCase();
 
-  // Under a draw penalty: only 2, 3, or Ace are allowed
-  if (drawPenaltyCount > 0) {
-    return rank === '2' || rank === '3' || rank === 'ACE';
+  // Rule 11: under joker penalty only Ace or Joker can be played
+  if (jokerPenaltyCount > 0) {
+    return rank === 'ACE' || rank === 'JOKER';
   }
 
-  // activeSuit overrides top card suit (set after an Ace)
-  const effectiveSuit = activeSuit ? activeSuit.toUpperCase() : topDiscard.suit.toUpperCase();
+  // Rule 10: under draw penalty only Ace or same danger-rank can be played
+  if (drawPenaltyCount > 0) {
+    if (rank === 'ACE') return true;
+    if (dangerRank && rank === dangerRank.toUpperCase()) return true;
+    return false;
+  }
 
-  return rank === topDiscard.value.toUpperCase() || suit === effectiveSuit;
+  // Rule 6: Ace-of-Clubs effect – next player must match both rank AND suit, or play Ace
+  if (activeRank && activeSuit) {
+    if (rank === 'ACE') return true;
+    return rank === activeRank.toUpperCase() && suit === activeSuit.toUpperCase();
+  }
+
+  // Rule 3: after a regular Ace only the chosen suit is valid
+  if (activeSuit) {
+    return suit === activeSuit.toUpperCase();
+  }
+
+  // Joker: always playable in normal play
+  if (rank === 'JOKER') return true;
+
+  // Normal: rank or suit matches the top discard
+  return rank === topDiscard.value.toUpperCase() || suit === topDiscard.suit.toUpperCase();
+}
+
+/**
+ * Return true when at least one card in `hand` is a legal move.
+ */
+function playerHasLegalMoves(hand, topDiscard, activeSuit, activeRank, drawPenaltyCount, dangerRank, jokerPenaltyCount) {
+  return hand.some(c => isLegalMove(c, topDiscard, activeSuit, activeRank, drawPenaltyCount, dangerRank, jokerPenaltyCount));
 }
 
 // ---------------------------------------------------------------------------
@@ -84,51 +115,60 @@ function getNextPlayerIndex(currentIndex, direction, players, skipCount = 0) {
 /**
  * Apply the effect of the card that was just played.
  *
- * Returns the mutated (shallow-cloned) gameState and an optional `pendingSuit`
- * flag when an Ace was played and we need to wait for chooseSuit.
- *
- * NOTE: This function does NOT advance `currentTurnIndex` for the Ace case
- * because the game waits for a `chooseSuit` event before advancing.
+ * Returns the mutated (shallow-cloned) gameState plus flags:
+ *   pendingSuit  – caller must wait for chooseSuit  (regular Ace)
+ *   pendingCard  – caller must wait for chooseCard   (Ace of Clubs)
+ *   skipCount    – extra players to skip             (Jack)
+ *   turnEnds     – turn advances immediately          (Ace blocking a penalty)
  *
  * @param {{ value: string, suit: string }} card
  * @param {object} gameState
  * @param {Array} players
- * @returns {{ gameState: object, pendingSuit: boolean, skipCount: number }}
+ * @returns {{ gameState, pendingSuit, pendingCard, skipCount, turnEnds }}
  */
 function applyCardEffect(card, gameState, players) {
   const gs = { ...gameState };
   const rank = card.value.toUpperCase();
+  const suit = card.suit.toUpperCase();
   let pendingSuit = false;
-  let skipCount = 0;           // extra players to skip (Jacks)
+  let pendingCard = false;
+  let skipCount = 0;
+  let turnEnds = false;
 
   switch (rank) {
     case 'ACE':
-      // Block any existing draw penalty
-      gs.drawPenaltyCount = 0;
-      // Signal caller to wait for chooseSuit before advancing turn
-      pendingSuit = true;
+      if (gs.drawPenaltyCount > 0 || gs.jokerPenaltyCount > 0) {
+        // Rule 4: Ace blocks any active penalty – no suit/card choice, turn ends immediately
+        gs.drawPenaltyCount = 0;
+        gs.jokerPenaltyCount = 0;
+        gs.dangerRank = null;
+        turnEnds = true;
+      } else if (suit === 'CLUBS') {
+        // Rule 6: Ace of Clubs – choose a target rank + suit
+        pendingCard = true;
+      } else {
+        // Regular Ace – choose a suit
+        pendingSuit = true;
+      }
       break;
 
     case '2':
       gs.drawPenaltyCount = (gs.drawPenaltyCount || 0) + 2;
+      gs.dangerRank = '2';
       break;
 
     case '3':
       gs.drawPenaltyCount = (gs.drawPenaltyCount || 0) + 3;
+      gs.dangerRank = '3';
       break;
 
     case '8':
     case 'QUEEN':
-      // Next player must answer with a legal card or draw 1.
-      // The "question" mechanic is handled at the turn level (they cannot
-      // simply pass – they must play a matching card or draw).  No special
-      // state change beyond a normal turn advance.
+      // Rule 2: same player must play an answer card before ending their turn
+      gs.pendingQuestion = true;
       break;
 
     case 'JACK':
-      // Skip the next player; multiple Jacks handled via skipCount = 1 here,
-      // but callers that detect consecutive Jacks should sum the skips before
-      // calling getNextPlayerIndex.
       skipCount = 1;
       break;
 
@@ -136,12 +176,16 @@ function applyCardEffect(card, gameState, players) {
       gs.direction = gs.direction === 'clockwise' ? 'counterclockwise' : 'clockwise';
       break;
 
+    case 'JOKER':
+      // Rule 11: next player must draw 5 unless they play Ace or Joker
+      gs.jokerPenaltyCount = (gs.jokerPenaltyCount || 0) + 5;
+      break;
+
     default:
-      // Normal card – no special effect
       break;
   }
 
-  return { gameState: gs, pendingSuit, skipCount };
+  return { gameState: gs, pendingSuit, pendingCard, skipCount, turnEnds };
 }
 
 // ---------------------------------------------------------------------------
@@ -149,8 +193,7 @@ function applyCardEffect(card, gameState, players) {
 // ---------------------------------------------------------------------------
 
 /**
- * Return true when `player` is allowed to win by playing `card` given the
- * current game settings.
+ * Return true when `player` is allowed to win by playing `card`.
  *
  * @param {{ value: string }} card
  * @param {{ hand: Array }} player
@@ -166,8 +209,10 @@ function canWinWithCard(card, player, noSpecialWin) {
 
 module.exports = {
   isLegalMove,
+  playerHasLegalMoves,
   applyCardEffect,
   getNextPlayerIndex,
   isSpecialCard,
   canWinWithCard,
+  RANKS,
 };
