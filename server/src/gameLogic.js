@@ -100,7 +100,6 @@ function applyCardEffect(card, gameState, players) {
   const rank = card.value.toUpperCase();
   let pendingSuit = false;
   let skipCount = 0;           // extra players to skip (Jacks)
-  let directionReversed = false;
 
   switch (rank) {
     case 'ACE':
@@ -135,7 +134,6 @@ function applyCardEffect(card, gameState, players) {
 
     case 'KING':
       gs.direction = gs.direction === 'clockwise' ? 'counterclockwise' : 'clockwise';
-      directionReversed = true;
       break;
 
     default:
@@ -143,7 +141,7 @@ function applyCardEffect(card, gameState, players) {
       break;
   }
 
-  return { gameState: gs, pendingSuit, skipCount, directionReversed };
+  return { gameState: gs, pendingSuit, skipCount };
 }
 
 // ---------------------------------------------------------------------------

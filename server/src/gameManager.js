@@ -1,6 +1,6 @@
 'use strict';
 
-const { newDeck, drawCards, rebuildDeckFromDiscard } = require('./deckApi');
+const { newDeck, drawCards, createFreshDeck } = require('./deckApi');
 const {
   isLegalMove,
   applyCardEffect,
@@ -62,11 +62,11 @@ async function safeDraw(gameState, count) {
   } catch (_err) {
     // Rebuild deck from discard pile (excluding top card)
     if (gameState.discardPile.length > 1) {
-      const newDeckId = await rebuildDeckFromDiscard(gameState.discardPile);
+      const newDeckId = await createFreshDeck();
       gameState = { ...gameState, deckId: newDeckId };
     } else {
       // Nothing to rebuild with – create a completely fresh deck
-      const newDeckId = await newDeck();
+      const newDeckId = await createFreshDeck();
       gameState = { ...gameState, deckId: newDeckId };
     }
     const cards = await drawCards(gameState.deckId, count);
@@ -447,6 +447,20 @@ function getRoom(roomCode) {
   return rooms.get(roomCode) || null;
 }
 
+/**
+ * Toggle the GM's noSpecialWin rule.
+ * @returns {{ gameState }}
+ */
+function setNoSpecialWin(roomCode, playerId, noSpecialWin) {
+  const room = rooms.get(roomCode);
+  if (!room) throw new Error('Room not found');
+  const gm = room.players.find(p => p.id === playerId);
+  if (!gm || !gm.isGM) throw new Error('Only the GM can change game rules');
+  if (room.gameState.phase !== 'lobby') throw new Error('Cannot change rules after game has started');
+  room.gameState.noSpecialWin = !!noSpecialWin;
+  return { gameState: publicGameState(room.gameState) };
+}
+
 module.exports = {
   createRoom,
   joinRoom,
@@ -458,4 +472,5 @@ module.exports = {
   leaveRoom,
   getOpenRooms,
   getRoom,
+  setNoSpecialWin,
 };

@@ -47,8 +47,8 @@ async function reshuffleDeck(deckId) {
  *
  * @returns {Promise<string>} New deck_id
  */
-async function rebuildDeckFromDiscard() {
+async function createFreshDeck() {
   return newDeck();
 }
 
-module.exports = { newDeck, drawCards, reshuffleDeck, rebuildDeckFromDiscard };
+module.exports = { newDeck, drawCards, reshuffleDeck, createFreshDeck };

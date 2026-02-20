@@ -262,6 +262,24 @@ io.on('connection', (socket) => {
   });
 
   // -------------------------------------------------------------------------
+  // setNoSpecialWin (GM toggle)
+  // -------------------------------------------------------------------------
+  socket.on('setNoSpecialWin', ({ roomCode, playerId, noSpecialWin } = {}) => {
+    if (!roomCode || !playerId || noSpecialWin === undefined) {
+      return emitError(socket, 'roomCode, playerId and noSpecialWin are required');
+    }
+    try {
+      const result = gm.setNoSpecialWin(roomCode, playerId, noSpecialWin);
+      io.to(roomCode).emit('gameUpdated', {
+        gameState: result.gameState,
+        lastAction: { type: 'ruleChange', noSpecialWin: result.gameState.noSpecialWin },
+      });
+    } catch (err) {
+      emitError(socket, err.message);
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // leaveRoom
   // -------------------------------------------------------------------------
   socket.on('leaveRoom', ({ roomCode, playerId } = {}) => {

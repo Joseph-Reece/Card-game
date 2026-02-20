@@ -41,7 +41,12 @@ function GameRoom({ playerId, roomCode, onLeave }) {
         setLastAction(actionText);
         setTimeout(() => setLastAction(''), 3500);
       }
-      setShowSuitPicker(!!(gs?.pendingSuit && gs?.currentTurnIndex === getMyIndex(p || players, playerId)));
+      const currentPlayers = p || players;
+      const shouldShowSuitPicker = !!(
+        gs?.pendingSuit &&
+        gs?.currentTurnIndex === getMyIndex(currentPlayers, playerId)
+      );
+      setShowSuitPicker(shouldShowSuitPicker);
     });
 
     socket.on('handUpdated', ({ hand }) => setMyHand(hand));
