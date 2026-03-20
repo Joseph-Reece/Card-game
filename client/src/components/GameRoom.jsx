@@ -211,8 +211,10 @@ function GameRoom({ playerId, roomCode, onLeave }) {
         </div>
       </header>
 
-      {errorMsg && <div className="error-banner">{errorMsg}</div>}
-      {lastAction && <div className="last-action-banner">{lastAction}</div>}
+      <div className="notifications-container">
+        {errorMsg && <div className="error-banner">{errorMsg}</div>}
+        {lastAction && <div className="last-action-banner">{lastAction}</div>}
+      </div>
 
       {/* Main game area */}
       <div className="gameroom-body">

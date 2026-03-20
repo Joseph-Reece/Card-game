@@ -53,16 +53,30 @@ body {
 .btn-warning:hover:not(:disabled) { background: #f39c12; }
 .btn-sm { padding: 6px 14px; font-size: 0.82rem; }
 
-/* ===== Error / Info banners ===== */
+/* ===== Notification overlay (fixed — prevents layout shifts) ===== */
+.notifications-container {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  z-index: 400;
+  pointer-events: none;
+  width: max-content;
+  max-width: 90vw;
+}
 .error-banner {
   background: rgba(192,57,43,0.9);
   color: #fff;
   padding: 10px 20px;
   text-align: center;
   font-weight: 600;
+  border-radius: 8px;
   animation: slideDown 0.2s ease;
-  z-index: 200;
-  position: relative;
+  pointer-events: auto;
 }
 .last-action-banner {
   background: rgba(39,174,96,0.85);
@@ -70,9 +84,11 @@ body {
   padding: 8px 20px;
   text-align: center;
   font-size: 0.88rem;
+  border-radius: 8px;
   animation: slideDown 0.2s ease;
+  pointer-events: auto;
 }
-@keyframes slideDown { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes slideDown { from { transform: translateY(-10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
 /* ===== LOBBY ===== */
 .lobby {
